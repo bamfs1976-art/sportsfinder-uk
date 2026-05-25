@@ -1,0 +1,44 @@
+# Netlify configuration for SportFinder UK
+# -----------------------------------------
+# Static site (no build step) plus a single serverless function that proxies
+# EPG.pw to dodge browser-side CORS blocks.
+
+[build]
+  publish = "."
+  command = ""
+
+[functions]
+  directory = "netlify/functions"
+  # Use the modern Node 20 runtime so we get native fetch and ESM.
+  node_bundler = "esbuild"
+
+# Friendly URL for the EPG proxy. Calls to /api/epg are routed to the function.
+[[redirects]]
+  from = "/api/epg"
+  to   = "/.netlify/functions/epg-proxy"
+  status = 200
+
+[[redirects]]
+  from = "/api/epg/*"
+  to   = "/.netlify/functions/epg-proxy"
+  status = 200
+
+# Security headers applied to every response. These layer on top of the
+# Content-Security-Policy <meta> tag in index.html — the most restrictive
+# of the two wins.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=(), payment=()"
+    # Allow the page to call its own /api/epg endpoint (same-origin) and the
+    # EPG.pw fallback if we ever re-enable client-side fetch.
+    Content-Security-Policy = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://epg.pw; img-src 'self' data:; base-uri 'self'; form-action 'self'"
+
+# Long-cache the function response one extra layer at the edge.
+[[headers]]
+  for = "/api/epg*"
+  [headers.values]
+    Cache-Control = "public, max-age=1800, s-maxage=1800, stale-while-revalidate=1800"

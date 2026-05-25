@@ -1,51 +1,110 @@
 # SportFinder UK
 
-Single-file HTML app that answers one question: **what live sport is on UK TV right now and today, and which channels do I need?**
+UK live sport TV listings, personalised, with subscription cost tracking.
 
-Live at **[sportfinder.netlify.app](https://sportfinder.netlify.app)**.
+Live at **[sportfinder.netlify.app](https://sportfinder.netlify.app)** once deployed.
 
 ## What it does
 
-- **Today** — time-grouped live sport listings across every UK sport channel (Sky, TNT, BBC, ITV, Channel 4, Eurosport, Premier Sports, Amazon Prime, DAZN). Filter by sport, toggle to your channels only, search by team or event, export any fixture to your calendar.
+- **Today** — time-grouped live sport listings across every UK sport channel (Sky, TNT, BBC, ITV, Channel 4, S4C, Premier Sports, Eurosport, Amazon Prime, DAZN). Filter by sport, toggle to your channels only, search by team or event, export any fixture to your calendar.
 - **My Sports** — three-step setup wizard captures your sports, teams (Premier League, Championship, Welsh, Scottish, URC, county cricket, F1, Super League…) and current subscriptions. Stored entirely in your browser.
-- **Cost Calculator** — splits *needed* from *optional* packages so you see the minimum subscription cost to watch what you actually follow. Shows free coverage, weekly cost and a pub-pint comparison.
-- **Settings** — dark/light theme, reset, about. Notification toggles are stubbed for v2.
+- **Cost Calculator** — splits *needed* from *optional* packages so you see the minimum subscription cost to watch what you actually follow. Shows free coverage, weekly cost and a pint comparison.
+- **Settings** — dark/light theme, reset, about. Notification toggles stubbed for v2.
 
-## How it works
+## How the data works
 
-- One file, no frameworks, no build step.
-- All preferences in `localStorage` (key `sportfinder_v1`, schema versioned).
-- EPG data: probes [EPG.pw](https://epg.pw) on load. When the live feed is reachable the status pill says so; the visible schedule is always rendered from a hand-built sample set so the UI demonstrates correctly even when CORS blocks the request.
-- WCAG 2.2 AA, keyboard accessible, mobile-first (verified at 375px), no inline event handlers, all dynamic text escaped, CSP-safe.
+Two layers:
+
+1. **Live EPG via Netlify Function.** The client calls `/api/epg`, which a Netlify Function proxies to [EPG.pw](https://epg.pw) server-side. CDN-cached for 30 minutes with stale-while-revalidate, so users always get an instant response. Source: [`netlify/functions/epg-proxy.mjs`](netlify/functions/epg-proxy.mjs).
+2. **Curated sample fallback.** For channels EPG.pw doesn't list (UK Eurosport, Amazon Prime Video, DAZN) or where EPG.pw returns an empty programme list, the app fills in a hand-built sample schedule so the UI stays populated. Status pill shows "Live · N/M channels" with the real count.
+
+Verified EPG.pw IDs as of 25 May 2026:
+
+| Channel | EPG.pw ID | Status |
+|---|---|---|
+| Sky Sports Main Event | 7673 | Live data |
+| Sky Sports Premier League | 381876 | Live data (Sky Sports+ feed) |
+| Sky Sports Football | 381878 | ID recognised, empty — sample fallback |
+| Sky Sports Cricket | 381880 | ID recognised, empty — sample fallback |
+| Sky Sports Golf | 381884 | ID recognised, empty — sample fallback |
+| Sky Sports F1 | 381886 | ID recognised, empty — sample fallback |
+| Sky Sports Arena | 381888 | ID recognised, empty — sample fallback |
+| Sky Sports Action | 381890 | ID recognised, empty — sample fallback |
+| Sky Sports News | 381892 | ID recognised, empty — sample fallback |
+| Sky Sports Tennis | 452498 | ID recognised, empty — sample fallback |
+| TNT Sports 1 | 400477 | Live data |
+| TNT Sports 2 | 400479 | Live data |
+| TNT Sports 3 | 400481 | Live data |
+| TNT Sports 4 | 400483 | Sample fallback |
+| BBC One | 12385 | Live data |
+| BBC Two | 12499 | Live data |
+| ITV1 | 12086 | Live data |
+| ITV4 | 12271 | Live data |
+| Channel 4 | 12113 | Live data |
+| S4C | 12378 | Live data |
+| Premier Sports 1 | 219100 | Live data |
+| Premier Sports 2 | 219104 | Live data |
+| Eurosport 1 & 2 | — | Not on EPG.pw for UK — sample only |
+| Amazon Prime Video | — | Streaming-only, no published EPG — sample only |
+| DAZN | — | Streaming-only, no published EPG — sample only |
+
+**Phase 2 work** will replace the streaming-service sample data with a fixtures-plus-rights mapping (TheSportsDB + Football-Data.org + a hand-maintained rights table).
 
 ## Deploying
 
-### Netlify Drop (easiest)
+### Connect this repo to Netlify (recommended)
 
-Drag `index.html` to [app.netlify.com/drop](https://app.netlify.com/drop). Site name: `sportfinder`.
+1. In Netlify, **Add new site → Import from Git → GitHub** → pick `bamfs1976-art/sportsfinder-uk`.
+2. **Build settings**: leave as detected. `netlify.toml` already declares `publish = "."` and `functions = "netlify/functions"`.
+3. **Site name**: `sportfinder` → resolves to `sportfinder.netlify.app`.
+4. Deploy. Every push to `main` redeploys automatically.
 
-### Netlify from this repo
+The Function deploys with the site. No environment variables needed.
 
-Connect this repository in Netlify. No build command, publish directory `/`.
+### Netlify Drop (no Function — sample data only)
 
-### Anywhere else
+Drag `index.html` to [app.netlify.com/drop](https://app.netlify.com/drop). The proxy won't exist, so the app falls back entirely to sample data. Only useful for a quick demo.
 
-It's a static file. Drop it on any host that serves HTML.
+## Project structure
 
-## TODO before going past V1
+```
+sportsfinder-uk/
+├── index.html                          # Single-file app (~2,000 lines)
+├── netlify.toml                        # Redirects, security headers
+├── netlify/functions/
+│   └── epg-proxy.mjs                   # /api/epg → EPG.pw, normalised JSON
+├── README.md
+└── .gitignore
+```
 
-The following EPG.pw channel IDs need verifying at [epg.pw/test_channel_xml.html](https://epg.pw/test_channel_xml.html?lang=en) and patching into the `CHANNELS` array in `index.html`:
+## Tech notes
 
-- BBC One HD, BBC Two HD
-- ITV1 HD, ITV4 HD
-- Channel 4 HD, S4C HD
-- Eurosport 1 HD, Eurosport 2 HD
-- Premier Sports 1 HD, Premier Sports 2 HD
-- Amazon Prime Video, DAZN
+- Vanilla HTML/CSS/JS — no frameworks, no build step.
+- Node 20+ runtime for the Function (Netlify default).
+- All preferences in `localStorage` (key `sportfinder_v1`, schema versioned).
+- WCAG 2.2 AA, keyboard accessible, mobile-first (verified at 375px).
+- No inline event handlers, all dynamic text escaped, CSP-restricted.
+- ICS calendar export (RFC5545 compliant) for any fixture.
 
-Sky Sports and TNT Sports IDs are already verified in the file.
+## Local testing the Function
 
-If the live feed CORS-blocks from your domain, add a Netlify Function proxy at `netlify/functions/epg-proxy.js` and route fetches through it.
+```bash
+# Install Netlify CLI if you haven't
+npm i -g netlify-cli
+
+# From repo root
+netlify dev
+# → http://localhost:8888
+# → http://localhost:8888/api/epg (proxied)
+```
+
+Or write a small standalone test script that imports the function directly:
+
+```js
+import handler from "./netlify/functions/epg-proxy.mjs";
+const res = await handler(new Request("https://x/api/epg"));
+console.log(await res.json());
+```
 
 ## License
 
