@@ -399,6 +399,30 @@
   .channel-badge[data-prov="premier"]  { background: var(--accent-teal); }
   .channel-badge[data-prov="dazn"]     { background: var(--accent-yellow); color: #1c1917; }
   .channel-badge[data-prov="eurosport"]{ background: #be185d; }
+  .channel-badge[data-prov="bbc"]      { background: #ef4444; }
+
+  /* Phase 2: blackout pill on fixtures suppressed under UK 3pm Saturday rule */
+  .blackout-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    font-size: .68rem;
+    font-weight: 600;
+    padding: .15rem .45rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+  }
+  .blackout-pill::before {
+    content: "";
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
 
   .not-in-package {
     font-size: .75rem;
@@ -782,7 +806,8 @@ const PROVIDERS = {
   amazon:    { name: "Amazon Prime Video", monthly: 8.99, note: "Select PL games and Champions League." },
   premier:   { name: "Premier Sports", monthly: 9.99, note: "Includes PS1 and PS2." },
   eurosport: { name: "Eurosport (via discovery+)", monthly: 0, note: "Included with TNT Sports £30.99/mo." },
-  dazn:      { name: "DAZN", monthly: 9.99, note: "Select boxing and women's football." }
+  dazn:      { name: "DAZN", monthly: 9.99, note: "Select boxing and women's football." },
+  bbc:       { name: "BBC iPlayer Live", monthly: 0, note: "TV Licence required (£169.50/yr). Wimbledon, FA Cup, Six Nations." }
 };
 
 // Channel registry. epgId verified for Sky and TNT per the source spec;
@@ -819,13 +844,17 @@ const CHANNELS = [
   { id:"premier-1", name:"Premier Sports 1", epgId:"219100", provider:"premier", tier:"paid", logoEmoji:"🟢", sports:["football","rugby-union"] },
   { id:"premier-2", name:"Premier Sports 2", epgId:"219104", provider:"premier", tier:"paid", logoEmoji:"🟢", sports:["football","rugby-union"] },
 
-  // No EPG.pw listing for UK Eurosport — sample-only until a feed is added
-  { id:"eurosport-1", name:"Eurosport 1",   epgId:null, provider:"eurosport", tier:"paid", logoEmoji:"🌍", sports:["tennis","cycling","snooker","motorsport"], dataSource:"manual" },
-  { id:"eurosport-2", name:"Eurosport 2",   epgId:null, provider:"eurosport", tier:"paid", logoEmoji:"🌍", sports:["tennis","cycling","snooker"], dataSource:"manual" },
+  // No EPG.pw listing for UK Eurosport — programmes come via rights table only
+  { id:"eurosport-1", name:"Eurosport 1",   epgId:null, provider:"eurosport", tier:"paid", logoEmoji:"🌍", sports:["tennis","cycling","snooker","motorsport"], dataSource:"rights" },
+  { id:"eurosport-2", name:"Eurosport 2",   epgId:null, provider:"eurosport", tier:"paid", logoEmoji:"🌍", sports:["tennis","cycling","snooker"], dataSource:"rights" },
 
-  // Streaming services — no published EPG anywhere, sample-only
-  { id:"amazon",      name:"Amazon Prime Video", epgId:null, provider:"amazon", tier:"paid", logoEmoji:"📦", sports:["football","tennis"], dataSource:"manual" },
-  { id:"dazn",        name:"DAZN", epgId:null, provider:"dazn", tier:"paid", logoEmoji:"⚡", sports:["boxing"], dataSource:"manual" }
+  // Sky Sports Mix — Sky API site_id 4090, broad mix of NBA/PL/cricket highlights
+  { id:"sky-mix",     name:"Sky Sports Mix",     epgId:null, provider:"sky", tier:"paid", logoEmoji:"🎬", sports:["football","cricket","nfl","rugby-union","f1"], dataSource:"sky" },
+
+  // Streaming services — populated server-side from the rights table
+  { id:"amazon",           name:"Amazon Prime Video", epgId:null, provider:"amazon", tier:"paid", logoEmoji:"📦", sports:["football","tennis","nfl"], dataSource:"rights" },
+  { id:"dazn",             name:"DAZN", epgId:null, provider:"dazn", tier:"paid", logoEmoji:"⚡", sports:["boxing","football"], dataSource:"rights" },
+  { id:"bbc-iplayer-live", name:"BBC iPlayer Live", epgId:null, provider:"bbc", tier:"free", logoEmoji:"📱", sports:["football","tennis","rugby-union","boxing"], dataSource:"rights" }
 ];
 
 const SPORTS = [
@@ -1172,9 +1201,13 @@ function buildLiveFixtures(channels) {
     const channelDef = channelById(ch.channelId);
     if (!channelDef) continue;
     for (const p of ch.programmes) {
-      const sport = classifySport(p.title, p.desc || "", channelDef.sports);
+      // Rights-injected programmes carry their own sport tag and are
+      // pre-filtered as live by the function. Prefer the server's hint.
+      const serverSport = p.sport || null;
+      const sport = serverSport || classifySport(p.title, p.desc || "", channelDef.sports);
       if (!sport) continue;
-      if (!isLiveSport(p.title, p.desc || "")) continue;
+      const isFixture = p.fixture === true;
+      if (!isFixture && !isLiveSport(p.title, p.desc || "")) continue;
       out.push({
         id: `${ch.channelId}-${p.start}`,
         channelId: ch.channelId,
@@ -1183,8 +1216,10 @@ function buildLiveFixtures(channels) {
         start: p.start,
         end: p.end,
         title: p.title,
-        competition: deriveCompetition(p.title, p.desc || "", sport),
-        sport
+        competition: p.competition || deriveCompetition(p.title, p.desc || "", sport),
+        sport,
+        blacked: p.blacked === true,
+        blackoutReason: p.blackoutReason || null
       });
     }
   }
@@ -1230,7 +1265,9 @@ function buildSampleFixtures() {
       end: f.end,
       title: f.title,
       competition: f.comp,
-      sport: f.sport
+      sport: f.sport,
+      blacked: false,
+      blackoutReason: null
     };
   }).filter(f => isLiveSport(f.title, f.competition));
 }
@@ -1427,17 +1464,21 @@ function renderFixtureCard(f, isOnNow) {
   const provider = ch ? ch.provider : "unknown";
   const subscribed = ch ? userSubscribesTo(ch) : false;
   const provLabel = ch ? providerLabel(ch.provider) : "TV";
-  return `<article class="fixture" data-sport="${escapeHtml(f.sport||"")}" data-id="${escapeHtml(f.id)}">
+  const blackoutBadge = f.blacked
+    ? `<span class="blackout-pill" title="${escapeHtml(f.blackoutReason || "UK 3pm Saturday blackout")}">Not televised</span>`
+    : "";
+  return `<article class="fixture" data-sport="${escapeHtml(f.sport||"")}" data-id="${escapeHtml(f.id)}"${f.blacked ? ' data-blacked="true"' : ""}>
     <div class="time">${escapeHtml(time)}</div>
     <div class="body">
       <h3 class="title-line">
-        <span class="sport-icon" aria-label="${escapeHtml(sp.name)}" role="img">${sp.icon}</span> ${escapeHtml(f.title)}${isOnNow ? ' <span class="on-now-badge" aria-label="Currently broadcasting">On Now</span>' : ''}
+        <span class="sport-icon" aria-label="${escapeHtml(sp.name)}" role="img">${sp.icon}</span> ${escapeHtml(f.title)}${isOnNow && !f.blacked ? ' <span class="on-now-badge" aria-label="Currently broadcasting">On Now</span>' : ''}${blackoutBadge}
       </h3>
       <div class="competition">${escapeHtml(f.competition)}</div>
       <div class="channel-row">
         <span class="channel-badge" data-prov="${escapeHtml(provider)}">${escapeHtml(provLabel)}</span>
         <span style="font-size:.85rem;color:var(--text-secondary)">${escapeHtml(f.channelName)}</span>
-        ${!subscribed && state.setupComplete ? `<span class="not-in-package">⚠︎ Not in your package · <a href="#cost" data-action="cost">see options</a></span>` : ""}
+        ${f.blacked ? `<span class="not-in-package" style="color:var(--danger)">${escapeHtml(f.blackoutReason || "3pm Saturday blackout — match not on live TV")}</span>` : ""}
+        ${!f.blacked && !subscribed && state.setupComplete ? `<span class="not-in-package">⚠︎ Not in your package · <a href="#cost" data-action="cost">see options</a></span>` : ""}
       </div>
     </div>
     <div class="actions">
@@ -1455,6 +1496,7 @@ function providerLabel(p) {
     case "premier": return "Premier";
     case "eurosport": return "Eurosport";
     case "dazn": return "DAZN";
+    case "bbc": return "iPlayer";
     default: return "TV";
   }
 }
@@ -1517,7 +1559,8 @@ function renderWizard(host) {
       { id:"amazon",    label:"Amazon Prime",     price:"£8.99",  sub:"Select PL games" },
       { id:"premier",   label:"Premier Sports",   price:"£9.99",  sub:"" },
       { id:"eurosport", label:"Eurosport",        price:"inc.",   sub:"Bundled with TNT Sports" },
-      { id:"dazn",      label:"DAZN",             price:"£9.99",  sub:"Boxing, women's football" }
+      { id:"dazn",      label:"DAZN",             price:"£9.99",  sub:"Boxing, women's football" },
+      { id:"bbc",       label:"BBC iPlayer Live", price:"TV Lic.", sub:"Wimbledon, FA Cup, Six Nations" }
     ];
     body = `<h3>What do you subscribe to?</h3>
       <p>So we can tell you which fixtures you can actually watch.</p>
