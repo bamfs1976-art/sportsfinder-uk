@@ -2,7 +2,7 @@
 
 UK live sport TV listings, personalised, with subscription cost tracking.
 
-Live at **[sportfinder.netlify.app](https://sportfinder.netlify.app)** once deployed.
+Live at **[sportsfinderuk.netlify.app](https://sportsfinderuk.netlify.app)**.
 
 ## What it does
 
@@ -84,7 +84,7 @@ The `NODE_TLS_REJECT_UNAUTHORIZED=0` flag is only needed when running locally be
 
 1. In Netlify, **Add new site → Import from Git → GitHub** → pick `bamfs1976-art/sportsfinder-uk`.
 2. **Build settings**: leave as detected. `netlify.toml` already declares `publish = "."` and `functions = "netlify/functions"`.
-3. **Site name**: `sportfinder` → resolves to `sportfinder.netlify.app`.
+3. **Site name**: `sportsfinderuk` → resolves to `sportsfinderuk.netlify.app`.
 4. Deploy. Every push to `main` redeploys automatically.
 
 The Function deploys with the site. No environment variables needed — TheSportsDB v3 is keyless and Sky's EPG endpoint is public.
