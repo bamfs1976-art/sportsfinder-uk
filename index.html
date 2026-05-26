@@ -875,24 +875,52 @@ const SPORTS = [
 ];
 
 const SPORT_KEYWORDS = {
-  "football":     ["Premier League","Championship","FA Cup","Champions League","Europa","La Liga","Serie A","Bundesliga","Ligue 1","MLS","WSL","League One","League Two","Carabao","EFL","Scottish Premiership","Old Firm","Play-Off","Play-off","Conference League","World Cup Qualifier"],
-  "cricket":      ["Test Match","ODI","T20","The Hundred","IPL","Ashes","County Championship","Vitality Blast","Royal London","Cricket"],
+  // Includes Sky-API abbreviations alongside full names so titles like
+  // "C'Ship Playoff Final" and "S/Lge: Hull KR v Wigan" classify correctly.
+  "football":     ["Premier League","Championship","C'Ship","Ch'ship","FA Cup","Champions League","Europa","La Liga","Serie A","Bundesliga","Ligue 1","MLS","WSL","League One","League Two","Carabao","EFL","Scottish Premiership","Old Firm","Play-Off","Play-off","Playoff","Conference League","World Cup Qualifier","PL:"],
+  "cricket":      ["Test Match","ODI","T20 Blast","T20","The Hundred","IPL","Indian Premier League","Ashes","County Championship","Vitality Blast","Royal London","Cricket"],
   "rugby-union":  ["Six Nations","URC","Gallagher Premiership","Premiership Rugby","Rugby Union","Autumn International","Champions Cup","Challenge Cup Rugby"],
-  "rugby-league": ["Super League","Challenge Cup","Rugby League","NRL","State of Origin"],
+  "rugby-league": ["Super League","S/Lge","Challenge Cup","Rugby League","NRL","State of Origin"],
   "f1":           ["Grand Prix","Formula 1","F1","Practice","Qualifying","Sprint"],
   "golf":         ["The Open","Masters","PGA","Ryder Cup","DP World Tour","Charles Schwab","BMW PGA"],
   "tennis":       ["Wimbledon","ATP","WTA","Roland Garros","French Open","US Open","Australian Open","Geneva Open","Strasbourg","Queen's"],
   "boxing":       ["Boxing","Fight Night","Title Fight","World Title","Heavyweight"],
   "darts":        ["PDC","World Darts","Premier League Darts","Premier Darts"],
   "snooker":      ["World Snooker","Masters Snooker","UK Championship","Crucible"],
-  "horse-racing": ["Racing","Cheltenham","Aintree","Royal Ascot","Derby","York","Newmarket","Goodwood"],
+  // "Racing" alone was too greedy (matched "Racing to fix the kitchen" etc.).
+  // Tighter aliases avoid that without losing real racing programmes.
+  "horse-racing": ["Horse Racing","ITV Racing","Sky Sports Racing","Cheltenham","Aintree","Royal Ascot","Newmarket","Goodwood","Curragh","Doncaster","Epsom","Newbury","Sandown"],
   "nfl":          ["NFL","Super Bowl","AFC","NFC"],
   "mma":          ["UFC","MMA","Bellator"],
   "motorsport":   ["MotoGP","WRC","BTCC","NASCAR","IndyCar","World Superbike","Le Mans"]
 };
 
-const EXCLUDE_TERMS = ["Classic","Retro","Rewind","Best of","Review","Magazine","Preview","Highlights","Goals","Catch Up","Replay","Greatest","Repeat"];
-const LIVE_PATTERNS = [/^Live[:\s]/i, /\bLive:\s/i, /\bv\s/, /\bvs\s/i];
+// Title-only patterns that mean "not a live fixture" no matter what else.
+// Sky's API uses heavy abbreviations and the old regex missed them, so
+// "Hlts" (highlights), "Catch-Up", "S/Lge Hlts", year stamps like "16/17"
+// and "Darts Gold:" all leaked through Phase 2's first cut.
+const EXCLUDE_TITLE = /\b(Hlts|Highlights|Classic|Classics|Retro|Rewind|Best of|Review|Magazine|Preview|Goals|Catch.?Up|Replay|Greatest|Repeat|Story|The Story of|Academy|Explained|Notebook|Tonight|Breakfast|Footage|School of|Documentary|Years of|Years|Bloom|Talks|Back Pages|All Access|Special Report|Inside the\b)\b|^Gold:|\bGold:|: 20\d\d Highlights|Official Film/i;
+
+// Year-stamp in the title — these are always replays in EPG context.
+// Matches: "2007", "2010 Final", "Taylor v Painter 2004", but NOT season
+// ranges like "2025-26", "23/24" — those need a separate check.
+const YEAR_STAMP = /\b(19|20)\d{2}\b(?!-\d)/;
+const SEASON_RANGE = /\b\d{2}\/\d{2}\b/;  // "16/17", "98/99" — old seasons
+
+// Description phrases Sky uses for replays. Very high signal.
+const REPLAY_DESC = /\b(relive|relives|revisit|revisits|look back|looking back|over the years|classic encounters?|classic matches?|classic match|classic contest|from the archive|throwback|reliving|a chance to)\b/i;
+
+// Positive live-fixture signals. At least one must be present.
+//  ^Live\b              — Sky convention for currently-airing or imminent live
+//  Capitalised X v[s] Y — proper team-vs-team pattern with team-like tokens
+//  Current-season stamp — "2025-26" / "2025/26" tags the season, not a year
+//  Grand Prix           — only motorsport title that reliably means LIVE on
+//                         Sky F1 (other "Final" patterns leak old WTA/ATP
+//                         tournament replays through the day).
+const LIVE_TITLE_PREFIX = /^Live\b/i;
+const TEAMS_VS_PATTERN  = /\b[A-Z][a-zA-Z'.&]{2,}(?:\s+[A-Z][a-zA-Z'.&]{2,})*\s+v(?:s)?\s+[A-Z][a-zA-Z'.&]{2,}/;
+const CURRENT_SEASON    = /\b20\d{2}[-\/]\d{2}\b/;
+const MARQUEE_LIVE      = /\bGrand Prix\b/i;
 
 const TEAMS = [
   // Premier League 2025-26
@@ -1105,33 +1133,80 @@ function todayKey() {
    4. SPORT DETECTION
    ========================================================================= */
 
+// Classify a programme into a sport using TITLE ONLY. The previous version
+// also scanned the description, which caused "Ramsay's Kitchen Nightmares
+// USA" to classify as horse-racing (because the desc mentioned "racing
+// against time"). Description-side classification is too noisy for Sky data
+// — title is the canonical source for what a programme actually is.
+//
+// Picks the LONGEST matching keyword across all sports so more specific
+// names win — "Indian Premier League" → cricket, not "Premier League" → football.
 function classifySport(title, comp, channelDefaultSports) {
-  const hay = `${title} ${comp}`;
+  const t = String(title || "");
+  let bestSport = null;
+  let bestLen = 0;
   for (const [sportId, kws] of Object.entries(SPORT_KEYWORDS)) {
     for (const kw of kws) {
       const re = new RegExp("\\b" + kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
-      if (re.test(hay)) return sportId;
+      if (re.test(t) && kw.length > bestLen) {
+        bestSport = sportId;
+        bestLen = kw.length;
+      }
     }
   }
+  if (bestSport) return bestSport;
+  // Fallback only if the channel covers a single sport (e.g. Sky F1).
   if (channelDefaultSports && channelDefaultSports.length === 1) return channelDefaultSports[0];
   return null;
 }
 
-function isLiveSport(title, comp) {
-  const hay = `${title} ${comp}`;
-  for (const term of EXCLUDE_TERMS) {
-    if (new RegExp("\\b" + term + "\\b", "i").test(hay)) return false;
-  }
-  for (const re of LIVE_PATTERNS) {
-    if (re.test(title)) return true;
-  }
-  // Programme title doesn't say "Live" but matches a competition keyword — treat as live by default
-  for (const kws of Object.values(SPORT_KEYWORDS)) {
-    for (const kw of kws) {
-      if (new RegExp("\\b" + kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(hay)) return true;
-    }
-  }
+// "Is this programme a live sport fixture?" Strict positive-AND-negative
+// rules. Phase 1 used a loose "any sport keyword anywhere = live" fallback
+// that worked for EPG.pw's pre-filtered data but flooded the listings with
+// Sky API replays and documentaries.
+function isLiveSport(title, comp, desc) {
+  const titleStr = String(title || "");
+  const descStr  = String(desc  || "");
+
+  // --- Negative rules ----------------------------------------------------
+  // Title-level rejects: highlights, catch-up, studio shows, documentaries.
+  if (EXCLUDE_TITLE.test(titleStr)) return false;
+  // Old-year stamp in title — always a replay.
+  if (YEAR_STAMP.test(titleStr)) return false;
+  // Old-season-range in title ("16/17", "98/99") — replay.
+  if (SEASON_RANGE.test(titleStr)) return false;
+  // Description hints at replay/archive content.
+  if (REPLAY_DESC.test(descStr)) return false;
+
+  // --- Positive rules ----------------------------------------------------
+  // Sky uses "Live" as a runtime title prefix for currently-airing programmes.
+  if (LIVE_TITLE_PREFIX.test(titleStr)) return true;
+  // Proper "Team A v Team B" pattern with capitalised tokens both sides.
+  if (TEAMS_VS_PATTERN.test(titleStr)) return true;
+  // Current-season stamp like "2025-26" — flags this season's fixture data.
+  if (CURRENT_SEASON.test(titleStr)) return true;
+  // Marquee "Grand Prix" title (the only safe marquee — see comment above).
+  if (MARQUEE_LIVE.test(titleStr)) return true;
   return false;
+}
+
+// Per-channel dedupe: Sky lists the same fixture multiple times across the
+// day (live broadcast + 4-5 replays). We keep the earliest occurrence of
+// each normalised title so the user sees each event once.
+function dedupeByTitle(fixtures) {
+  const groups = new Map();   // channelId -> Map<normTitle, fixture>
+  for (const f of fixtures) {
+    const norm = String(f.title || "").toLowerCase().replace(/^live[:\s]+/, "").replace(/\s+/g, " ").trim();
+    const channelMap = groups.get(f.channelId) || new Map();
+    const existing = channelMap.get(norm);
+    if (!existing || new Date(f.start) < new Date(existing.start)) {
+      channelMap.set(norm, f);
+    }
+    groups.set(f.channelId, channelMap);
+  }
+  const out = [];
+  for (const channelMap of groups.values()) for (const f of channelMap.values()) out.push(f);
+  return out;
 }
 
 /* =========================================================================
@@ -1166,7 +1241,7 @@ async function loadEPG(forceRefresh) {
     const payload = await res.json();
     okChannels = payload.channelsOk || 0;
     totalChannels = payload.channelsReturned || 0;
-    liveFixtures = buildLiveFixtures(payload.channels || []);
+    liveFixtures = dedupeByTitle(buildLiveFixtures(payload.channels || []));
     proxyOk = okChannels > 0;
   } catch (err) {
     console.warn("Live EPG fetch failed, falling back to sample", err);
@@ -1207,7 +1282,7 @@ function buildLiveFixtures(channels) {
       const sport = serverSport || classifySport(p.title, p.desc || "", channelDef.sports);
       if (!sport) continue;
       const isFixture = p.fixture === true;
-      if (!isFixture && !isLiveSport(p.title, p.desc || "")) continue;
+      if (!isFixture && !isLiveSport(p.title, "", p.desc || "")) continue;
       out.push({
         id: `${ch.channelId}-${p.start}`,
         channelId: ch.channelId,
@@ -1269,7 +1344,7 @@ function buildSampleFixtures() {
       blacked: false,
       blackoutReason: null
     };
-  }).filter(f => isLiveSport(f.title, f.competition));
+  }).filter(f => isLiveSport(f.title, f.competition, ""));
 }
 
 function setStatus(mode, text) {

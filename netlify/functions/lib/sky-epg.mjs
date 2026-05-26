@@ -70,8 +70,12 @@ function normalise(events) {
     .map(e => {
       const start = new Date(e.st * 1000);
       const end = new Date((e.st + (e.d || 3600)) * 1000);
+      // Sky prefixes some titles with "⋗" (or other glyph markers) for
+      // "next up" hints. Strip any leading non-alphanumeric symbol so the
+      // title starts on a real word.
+      const cleanTitle = String(e.t).replace(/^[^\w\d"'(]+/, "").trim();
       return {
-        title: String(e.t).trim(),
+        title: cleanTitle,
         desc: e.sy ? String(e.sy).trim() : "",
         start: start.toISOString(),
         end: end.toISOString()
