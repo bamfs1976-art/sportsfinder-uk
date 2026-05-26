@@ -482,6 +482,25 @@
     font-size: .95rem;
   }
   .icon-btn:hover { background: var(--bg-tertiary); }
+  .icon-btn[aria-pressed="true"] {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-yellow);
+    color: var(--accent-yellow);
+  }
+  .icon-btn[aria-pressed="true"]:hover { background: var(--bg-primary); }
+
+  /* Phase 4: My List summary block at the top of the watchlist page */
+  .my-list-summary {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+  }
+  .my-list-summary .btn[disabled] {
+    opacity: .5;
+    cursor: not-allowed;
+  }
 
   .on-now-badge {
     background: var(--danger);
@@ -770,6 +789,7 @@
       <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="navList">☰ Menu</button>
       <ul class="nav-list" id="navList" role="list">
         <li><a href="#today" data-route="today" aria-current="page">Today</a></li>
+        <li><a href="#mylist" data-route="mylist">My List</a></li>
         <li><a href="#mysports" data-route="mysports">My Sports</a></li>
         <li><a href="#cost" data-route="cost">Cost Calculator</a></li>
         <li><a href="#settings" data-route="settings" aria-label="Settings">⚙︎ Settings</a></li>
@@ -794,6 +814,12 @@
     </div>
     <div class="pill-group" id="sportPills" role="group" aria-label="Filter by sport"></div>
     <div id="todayContent" aria-live="polite"></div>
+  </section>
+
+  <!-- MY LIST (watchlist) -->
+  <section class="page" id="page-mylist" aria-labelledby="mylist-title">
+    <h2 id="mylist-title">My List</h2>
+    <div id="myListContent" aria-live="polite"></div>
   </section>
 
   <!-- MY SPORTS -->
@@ -998,8 +1024,11 @@ const defaultState = {
   setupComplete: false,
   channelToggle: "all",   // "all" or "mine"
   activeSportFilter: "all",
+  myList: [],             // Phase 4: user's watchlist of fixtures
   lastVisit: null
 };
+
+const MY_LIST_CAP = 100;
 
 let state = loadState();
 let liveData = null;       // raw EPG fetched (per channel)
@@ -1022,7 +1051,12 @@ function loadState() {
       ...parsed,
       mySports: Array.isArray(parsed.mySports) ? parsed.mySports.filter(x=>typeof x==="string") : [],
       myTeams: Array.isArray(parsed.myTeams) ? parsed.myTeams.filter(x=>typeof x==="string") : [],
-      mySubscriptions: Array.isArray(parsed.mySubscriptions) ? parsed.mySubscriptions.filter(x=>typeof x==="string") : []
+      mySubscriptions: Array.isArray(parsed.mySubscriptions) ? parsed.mySubscriptions.filter(x=>typeof x==="string") : [],
+      // myList persists full fixture snapshots so saved items stay renderable
+      // even after they fall out of today's EPG. Reject malformed entries.
+      myList: Array.isArray(parsed.myList)
+        ? parsed.myList.filter(x => x && typeof x.id === "string" && typeof x.start === "string" && typeof x.title === "string").slice(0, MY_LIST_CAP)
+        : []
     };
   } catch (e) {
     console.warn("Failed to load state, using defaults", e);
@@ -1037,6 +1071,55 @@ function saveState() {
   } catch (e) {
     console.warn("Failed to save state", e);
   }
+}
+
+/* Phase 4: My List helpers ------------------------------------------------ */
+
+function isInMyList(id) {
+  return state.myList.some(f => f.id === id);
+}
+
+function addToMyList(fixture) {
+  if (!fixture || !fixture.id || isInMyList(fixture.id)) return false;
+  // Snapshot the fixture so it remains renderable after it leaves the EPG.
+  const snapshot = {
+    id: fixture.id,
+    channelId: fixture.channelId,
+    channelName: fixture.channelName,
+    provider: fixture.provider,
+    start: fixture.start,
+    end: fixture.end,
+    title: fixture.title,
+    competition: fixture.competition,
+    sport: fixture.sport,
+    image: fixture.image || null,
+    hd: fixture.hd === true,
+    blacked: fixture.blacked === true,
+    blackoutReason: fixture.blackoutReason || null,
+    savedAt: new Date().toISOString()
+  };
+  state.myList.push(snapshot);
+  // Cap at most recent N entries (oldest savedAt drop first).
+  if (state.myList.length > MY_LIST_CAP) {
+    state.myList.sort((a, b) => (a.savedAt || "").localeCompare(b.savedAt || ""));
+    state.myList = state.myList.slice(-MY_LIST_CAP);
+  }
+  saveState();
+  return true;
+}
+
+function removeFromMyList(id) {
+  const before = state.myList.length;
+  state.myList = state.myList.filter(f => f.id !== id);
+  if (state.myList.length !== before) saveState();
+}
+
+function clearPastFromMyList() {
+  const now = Date.now();
+  const before = state.myList.length;
+  state.myList = state.myList.filter(f => new Date(f.end).getTime() > now);
+  if (state.myList.length !== before) saveState();
+  return before - state.myList.length;
 }
 
 /* =========================================================================
@@ -1298,7 +1381,7 @@ function updateLastUpdated(d) {
    6. ROUTING
    ========================================================================= */
 
-const ROUTES = ["today","mysports","cost","settings"];
+const ROUTES = ["today","mylist","mysports","cost","settings"];
 
 function go(route) {
   if (!ROUTES.includes(route)) route = "today";
@@ -1313,6 +1396,7 @@ function go(route) {
   window.scrollTo({ top: 0, behavior: "instant" });
 
   if (route === "today") renderToday();
+  if (route === "mylist") renderMyList();
   if (route === "mysports") renderMySports();
   if (route === "cost") renderCost();
   if (route === "settings") renderSettings();
@@ -1475,8 +1559,36 @@ function renderTodayContent() {
       if (fx) downloadICS(fx);
     });
   });
+  bindSaveButtons(host);
   host.querySelectorAll("[data-action='cost']").forEach(btn => {
     btn.addEventListener("click", (e) => { e.preventDefault(); location.hash = "#cost"; });
+  });
+}
+
+// Phase 4: toggle My List membership on bookmark click. The card re-renders
+// only its own button — full list re-render happens when the My List page
+// is opened, not on every star tap. Keeps interactions snappy.
+function bindSaveButtons(host) {
+  host.querySelectorAll("[data-action='save']").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (isInMyList(id)) {
+        removeFromMyList(id);
+        btn.setAttribute("aria-pressed", "false");
+        btn.textContent = "☆";
+        btn.title = "Save to my list";
+        btn.setAttribute("aria-label", "Save to my list");
+      } else {
+        const fx = allFixtures.find(f => f.id === id) || state.myList.find(f => f.id === id);
+        if (!fx) return;
+        if (addToMyList(fx)) {
+          btn.setAttribute("aria-pressed", "true");
+          btn.textContent = "★";
+          btn.title = "Saved — tap to remove";
+          btn.setAttribute("aria-label", "Remove from my list");
+        }
+      }
+    });
   });
 }
 
@@ -1492,6 +1604,7 @@ function renderFixtureCard(f, isOnNow) {
     ? `<span class="blackout-pill" title="${escapeHtml(f.blackoutReason || "UK 3pm Saturday blackout")}">Not televised</span>`
     : "";
   const hdBadge = f.hd ? '<span class="hd-badge" title="Broadcast in HD">HD</span>' : "";
+  const saved = isInMyList(f.id);
   // Programme thumbnail (Sky source only — see lib/sky-epg.mjs). onerror hides
   // the image if the upstream CDN 404s so the placeholder block stays clean.
   const thumb = f.image
@@ -1513,6 +1626,7 @@ function renderFixtureCard(f, isOnNow) {
       </div>
     </div>
     <div class="actions">
+      <button class="icon-btn" data-action="save" data-id="${escapeHtml(f.id)}" aria-pressed="${saved ? "true" : "false"}" aria-label="${saved ? "Remove" : "Save"} ${escapeHtml(f.title)} ${saved ? "from" : "to"} my list" title="${saved ? "Saved — tap to remove" : "Save to my list"}">${saved ? "★" : "☆"}</button>
       <button class="icon-btn" data-action="ics" data-id="${escapeHtml(f.id)}" aria-label="Add ${escapeHtml(f.title)} to calendar" title="Add to calendar">📅</button>
     </div>
   </article>`;
@@ -1734,6 +1848,7 @@ function renderMySportsFeed(host) {
       if (fx) downloadICS(fx);
     });
   });
+  bindSaveButtons(host);
 }
 
 /* =========================================================================
@@ -1999,6 +2114,104 @@ function icsEscape(s) {
 }
 function toICSDate(d) {
   return d.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}/, "");
+}
+
+// Bulk ICS export — used by the My List page to grab the whole watchlist
+// as a single .ics file the user can import to their calendar in one go.
+function downloadICSBatch(fixtures, filename) {
+  if (!fixtures.length) return;
+  const dtStamp = toICSDate(new Date());
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SportFinder UK//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+  for (const fx of fixtures) {
+    const ch = channelById(fx.channelId);
+    lines.push("BEGIN:VEVENT");
+    lines.push(`UID:${fx.id}@sportfinder.uk`);
+    lines.push(`DTSTAMP:${dtStamp}`);
+    lines.push(`DTSTART:${toICSDate(new Date(fx.start))}`);
+    lines.push(`DTEND:${toICSDate(new Date(fx.end))}`);
+    lines.push(`SUMMARY:${icsEscape(fx.title)}`);
+    lines.push(`DESCRIPTION:${icsEscape(fx.competition + " · Watch on " + (ch ? ch.name : fx.channelName))}`);
+    lines.push(`LOCATION:${icsEscape(ch ? ch.name : fx.channelName)}`);
+    lines.push("END:VEVENT");
+  }
+  lines.push("END:VCALENDAR");
+  const blob = new Blob([lines.join("\r\n")], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+/* =========================================================================
+   11b. MY LIST renderer
+   ========================================================================= */
+
+function renderMyList() {
+  const host = document.getElementById("myListContent");
+  const list = state.myList.slice().sort((a, b) => a.start.localeCompare(b.start));
+  const now = Date.now();
+  const upcoming = list.filter(f => new Date(f.end).getTime() > now);
+  const past = list.filter(f => new Date(f.end).getTime() <= now);
+
+  if (list.length === 0) {
+    host.innerHTML = `<div class="empty-state">
+      <div class="icon" aria-hidden="true">⭐</div>
+      <h3>No fixtures saved yet</h3>
+      <p>Browse <a href="#today" style="color:var(--accent-blue)">today's listings</a> and tap the ☆ on any fixture to add it to your shortlist.</p>
+    </div>`;
+    return;
+  }
+
+  const summary = `<div class="my-list-summary">
+    <div><strong>${list.length}</strong> ${list.length === 1 ? "fixture" : "fixtures"} saved · <strong>${upcoming.length}</strong> upcoming · <strong>${past.length}</strong> past</div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem">
+      <button class="btn" id="myListExportAll" ${upcoming.length === 0 ? "disabled" : ""}>📅 Export upcoming to calendar</button>
+      ${past.length > 0 ? `<button class="btn" id="myListClearPast">Clear ${past.length} past</button>` : ""}
+    </div>
+  </div>`;
+
+  const sections = [];
+  if (upcoming.length > 0) {
+    sections.push(`<section class="time-group">
+      <h3 class="time-group-label">Upcoming <span style="color:var(--text-secondary);font-weight:400">${upcoming.length}</span></h3>
+      <div class="fixture-list">${upcoming.map(f => renderFixtureCard(f, false)).join("")}</div>
+    </section>`);
+  }
+  if (past.length > 0) {
+    sections.push(`<section class="time-group" style="opacity:.7">
+      <h3 class="time-group-label">Past <span style="color:var(--text-secondary);font-weight:400">${past.length}</span></h3>
+      <div class="fixture-list">${past.map(f => renderFixtureCard(f, false)).join("")}</div>
+    </section>`);
+  }
+
+  host.innerHTML = summary + sections.join("");
+
+  const exportBtn = host.querySelector("#myListExportAll");
+  if (exportBtn) exportBtn.addEventListener("click", () => downloadICSBatch(upcoming, "sportfinder-my-list.ics"));
+  const clearBtn = host.querySelector("#myListClearPast");
+  if (clearBtn) clearBtn.addEventListener("click", () => {
+    if (window.confirm(`Remove ${past.length} past ${past.length === 1 ? "fixture" : "fixtures"} from your list?`)) {
+      clearPastFromMyList();
+      renderMyList();
+    }
+  });
+  host.querySelectorAll("[data-action='ics']").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      const fx = state.myList.find(f => f.id === id);
+      if (fx) downloadICS(fx);
+    });
+  });
+  bindSaveButtons(host);
+  // Re-render after a tap removes an item (the star toggle won't relayout
+  // the page; explicit re-render keeps counts and section headings honest).
+  host.querySelectorAll("[data-action='save']").forEach(btn => {
+    btn.addEventListener("click", () => requestAnimationFrame(renderMyList), { once: true });
+  });
 }
 
 /* =========================================================================
