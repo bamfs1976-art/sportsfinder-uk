@@ -943,90 +943,12 @@ const TEAMS = [
   ...["Wigan Warriors","St Helens","Leeds Rhinos","Warrington Wolves","Hull KR","Salford Red Devils","Catalans Dragons","Huddersfield Giants","Castleford Tigers","Leigh Leopards","Wakefield Trinity","London Broncos"].map(n=>({id:slug(n),name:n,sport:"rugby-league",league:"Super League"}))
 ];
 
-// Sample EPG schedule for 25 May 2026 — fallback when live fetch fails.
-// Times in 24h local. Each entry seeds at least one channel.
-const SAMPLE_EPG_DATE = "2026-05-25";
-
-function mk(channelId, start, end, title, comp, sport) {
-  return { channelId, start: SAMPLE_EPG_DATE+"T"+start+":00", end: SAMPLE_EPG_DATE+"T"+end+":00", title, comp, sport };
-}
-
-const SAMPLE_FIXTURES = [
-  // F1 Monaco Grand Prix
-  mk("sky-f1","08:00","09:30","F1: Monaco Grand Prix Pre-Race Build-Up","Formula 1","f1"),
-  mk("sky-f1","09:30","13:00","Live: Monaco Grand Prix","Formula 1","f1"),
-  mk("sky-f1","13:00","15:00","F1: Monaco Grand Prix Post-Race Analysis","Formula 1","f1"),
-  mk("c4","12:55","16:00","Live: Monaco Grand Prix Highlights","Formula 1","f1"),
-
-  // Championship Play-Off Final at Wembley
-  mk("sky-main-event","14:00","17:30","Live: Sheffield United v Coventry City — Championship Play-Off Final","Championship Play-Off","football"),
-  mk("sky-premier","14:00","17:30","Live: Sheffield United v Coventry City — Championship Play-Off Final","Championship Play-Off","football"),
-
-  // Premiership Rugby Final at Twickenham
-  mk("tnt-1","15:00","17:30","Live: Bath v Northampton Saints — Premiership Rugby Final","Gallagher Premiership","rugby-union"),
-  mk("itv-1","15:00","17:30","Live: Bath v Northampton Saints — Premiership Rugby Final","Gallagher Premiership","rugby-union"),
-
-  // IPL Final
-  mk("sky-cricket","14:30","18:30","Live: IPL Final","Indian Premier League","cricket"),
-  mk("sky-plus","14:30","18:30","Live: IPL Final","Indian Premier League","cricket"),
-
-  // French Open Day 1 — Roland Garros
-  mk("tnt-2","10:00","19:00","Live: French Open — Day 1","Roland Garros","tennis"),
-  mk("tnt-3","12:00","19:00","Live: French Open — Court Suzanne Lenglen","Roland Garros","tennis"),
-  mk("eurosport-1","10:00","20:00","Live: French Open — Day 1 Coverage","Roland Garros","tennis"),
-  mk("eurosport-2","11:00","18:00","Live: French Open — Outside Courts","Roland Garros","tennis"),
-
-  // Super League
-  mk("sky-arena","15:00","17:15","Live: Wigan Warriors v St Helens","Super League","rugby-league"),
-  mk("sky-action","17:30","19:30","Live: Leeds Rhinos v Warrington Wolves","Super League","rugby-league"),
-
-  // ATP Geneva Open Final
-  mk("sky-tennis","13:00","15:30","Live: Geneva Open Final","ATP","tennis"),
-
-  // Premier League — final-day review (post-season; included for review fans)
-  mk("sky-premier","18:00","19:00","Premier League Review: Final Day","Premier League","football"),
-
-  // PGA Tour — Charles Schwab Challenge
-  mk("sky-golf","19:00","23:00","Live: PGA Tour — Charles Schwab Challenge Final Round","PGA Tour","golf"),
-
-  // NRL overnight
-  mk("sky-arena","04:00","06:00","Live: Brisbane Broncos v Melbourne Storm","NRL","rugby-league"),
-
-  // MotoGP Catalonia
-  mk("tnt-4","12:00","14:30","Live: MotoGP Catalonia Grand Prix","MotoGP","motorsport"),
-
-  // Horse Racing — Curragh
-  mk("itv-4","13:30","16:30","Live: Curragh Racing","Irish Racing","horse-racing"),
-  mk("itv-1","13:30","16:30","Live: ITV Racing — Curragh","Irish Racing","horse-racing"),
-
-  // Boxing — late slot
-  mk("tnt-1","21:00","23:30","Live: Boxing Fight Night — World Title","Boxing","boxing"),
-
-  // Darts — Premier League Darts
-  mk("sky-action","20:00","22:30","Live: Premier League Darts — Night 16","PDC","darts"),
-
-  // WSL — final round of the season
-  mk("sky-football","12:00","14:00","Live: Arsenal v Manchester City — WSL","Women's Super League","football"),
-
-  // Scottish Premiership
-  mk("premier-1","12:00","14:00","Live: Celtic v Rangers","Scottish Premiership","football"),
-
-  // Welsh interest — Wrexham
-  mk("sky-football","19:30","21:30","Live: Wrexham v Plymouth Argyle — EFL Championship Play-Off Semi-Final","Championship Play-Off","football"),
-
-  // S4C
-  mk("s4c","19:00","21:00","Live: Sgorio — Cymru Premier Highlights","Cymru Premier","football"),
-
-  // Amazon Prime — boxing
-  mk("amazon","22:00","00:00","Live: Heavyweight Boxing — Title Fight","Boxing","boxing"),
-
-  // DAZN — women's football
-  mk("dazn","13:00","15:00","Live: UEFA Women's Champions League Final","Women's Champions League","football"),
-
-  // BBC One — Sunday lunchtime sport coverage
-  mk("bbc-one","13:00","14:00","Sunday Morning Live: Sport Special","Sunday Sport","football"),
-  mk("bbc-two","20:00","22:00","Live: World Snooker Highlights","World Snooker","snooker")
-];
+// Phase 2 removed the hardcoded sample schedule. It was tied to 25 May 2026
+// content (Monaco GP, Celtic v Rangers, Championship Play-Off Final) and
+// started leaking stale fixtures whenever the live function couldn't be
+// reached. With Sky's EPG API + EPG.pw + TheSportsDB now providing real
+// data, the honest response to "function unreachable" is an empty state
+// telling the user the listings can't load — not a fabricated schedule.
 
 /* =========================================================================
    2. STATE
@@ -1244,27 +1166,22 @@ async function loadEPG(forceRefresh) {
     liveFixtures = dedupeByTitle(buildLiveFixtures(payload.channels || []));
     proxyOk = okChannels > 0;
   } catch (err) {
-    console.warn("Live EPG fetch failed, falling back to sample", err);
+    console.warn("Live EPG fetch failed", err);
     proxyOk = false;
   }
 
-  // Always pull in sample data for channels the proxy couldn't cover
-  // (Eurosport, Amazon Prime, DAZN, plus any channel that errored upstream).
-  const liveChannelIds = new Set(liveFixtures.map(f => f.channelId));
-  const sampleFixtures = buildSampleFixtures().filter(f => !liveChannelIds.has(f.channelId));
-
-  allFixtures = [...liveFixtures, ...sampleFixtures];
+  allFixtures = liveFixtures;
 
   if (proxyOk) {
     dataMode = "live";
-    const statusText = `Live · ${okChannels}/${totalChannels} channels${sampleFixtures.length ? " + sample" : ""}`;
+    const statusText = `Live · ${okChannels}/${totalChannels} channels · ${liveFixtures.length} fixtures`;
     setStatus("live", statusText);
     writeCache(allFixtures, dataMode, statusText);
   } else {
-    dataMode = "sample";
-    const statusText = "Sample schedule · live feed unreachable";
+    dataMode = "offline";
+    const statusText = "Live listings unavailable — deploy the Netlify Function to enable real data";
     setStatus("sample", statusText);
-    writeCache(allFixtures, dataMode, statusText);
+    // Don't cache the empty state so the next visit retries the function.
   }
   updateLastUpdated(new Date());
 }
@@ -1328,24 +1245,8 @@ function writeCache(fixtures, mode, statusText) {
   } catch (e) { /* ignore */ }
 }
 
-function buildSampleFixtures() {
-  return SAMPLE_FIXTURES.map(f => {
-    const ch = channelById(f.channelId);
-    return {
-      id: `${f.channelId}-${f.start}`,
-      channelId: f.channelId,
-      channelName: ch ? ch.name : f.channelId,
-      provider: ch ? ch.provider : "unknown",
-      start: f.start,
-      end: f.end,
-      title: f.title,
-      competition: f.comp,
-      sport: f.sport,
-      blacked: false,
-      blackoutReason: null
-    };
-  }).filter(f => isLiveSport(f.title, f.competition, ""));
-}
+// Sample fixtures retired in Phase 2 — see comment block above SAMPLE_FIXTURES
+// removal. When live data is unavailable, the renderer shows an empty state.
 
 function setStatus(mode, text) {
   const el = document.getElementById("dataStatus");
@@ -1478,11 +1379,22 @@ function renderTodayContent() {
   const filtered = applyFilters(allFixtures);
 
   if (filtered.length === 0) {
-    host.innerHTML = `<div class="empty-state">
-      <div class="icon" aria-hidden="true">📭</div>
-      <h3>No live sport found</h3>
-      <p>Try clearing your filters, switching the channel toggle, or adding more sports to your preferences.</p>
-    </div>`;
+    // Distinguish "no live listings at all" (function down) from "filters
+    // matched nothing today" — different problems, different next steps.
+    if (allFixtures.length === 0) {
+      host.innerHTML = `<div class="empty-state">
+        <div class="icon" aria-hidden="true">📡</div>
+        <h3>Live listings unavailable</h3>
+        <p>The EPG service couldn't be reached. If this is your own deployment, make sure the Netlify Function is published — the static site alone can't load schedules.</p>
+        <p style="margin-top:.75rem;font-size:.85rem"><a href="https://github.com/bamfs1976-art/sportsfinder-uk#deploying" target="_blank" rel="noopener" style="color:var(--accent-blue)">How to deploy →</a></p>
+      </div>`;
+    } else {
+      host.innerHTML = `<div class="empty-state">
+        <div class="icon" aria-hidden="true">📭</div>
+        <h3>No live sport found</h3>
+        <p>Try clearing your filters, switching the channel toggle, or adding more sports to your preferences.</p>
+      </div>`;
+    }
     return;
   }
 
