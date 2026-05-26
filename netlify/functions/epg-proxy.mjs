@@ -31,6 +31,31 @@ import { fetchSportsdbFixtures } from "./lib/sportsdb.mjs";
 import { resolveRights } from "./lib/rights-table.mjs";
 import { checkBlackout } from "./lib/blackout.mjs";
 
+// Sky's event sub-genre (esg) → our sport id. eg=7 is always "sport"; the
+// esg refines it. Mapped by observing actual Sky programme genres across
+// every Sky Sports channel — see the README for the full mapping table.
+// Using esg eliminates the keyword-regex guesswork that previously caused
+// misclassifications like "Ramsay's Kitchen Nightmares" → horse-racing.
+const ESG_TO_SPORT = {
+  1:  "nfl",            // American football / NFL
+  3:  null,             // Studio / news (filter out, not a sport fixture)
+  4:  null,             // Basketball (we don't support NBA/WNBA in client)
+  5:  "boxing",         // Boxing / MMA
+  6:  "cricket",        // Cricket
+  8:  "football",       // Football (PL, EFL, La Liga, etc.)
+  11: "f1",             // F1 / Motorsport (sometimes MotoGP — we treat as f1)
+  13: "rugby-league",   // Rugby League
+  14: null,             // Equestrian (we don't expose as a sport in client)
+  17: "tennis",         // Tennis
+  19: "darts"           // Darts
+};
+
+function skySportFromEsg(esg) {
+  if (typeof esg !== "number") return null;
+  // ESG_TO_SPORT has explicit null for "not a sport we surface".
+  return ESG_TO_SPORT.hasOwnProperty(esg) ? ESG_TO_SPORT[esg] : null;
+}
+
 // EPG.pw IDs — retained for FTA + as a fallback for Sky/TNT if their API
 // stalls. Channels covered by Sky's API are still listed here so the merge
 // step has both candidates.
@@ -133,11 +158,25 @@ function mergeChannels(skyMap, pwMap) {
     const pickSky = skyCount >= pwCount && skyCount > 0;
     const chosen = pickSky ? sky : pw;
     if (!chosen) continue;
+    const programmes = (chosen.programmes || []).map(p => {
+      const out = { ...p };
+      // For Sky-sourced programmes, fill in sport from the esg sub-genre
+      // and the image URL from programmeuuid. This lets the client skip
+      // its keyword classification path entirely for these entries.
+      if (pickSky) {
+        const sport = skySportFromEsg(p.skyEsg);
+        if (sport) out.sport = sport;
+        if (p.programmeuuid) {
+          out.image = `https://images.metadata.sky.com/pd-image/${p.programmeuuid}/16-9/640`;
+        }
+      }
+      return out;
+    });
     out.set(id, {
       channelId: id,
       name: chosen.name,
       source: pickSky ? "sky" : (pwCount > 0 ? "epg.pw" : "none"),
-      programmes: chosen.programmes || []
+      programmes
     });
   }
   // Make sure synthetic channels have an entry even if no fixtures land later.

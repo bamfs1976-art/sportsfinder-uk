@@ -78,7 +78,14 @@ function normalise(events) {
         title: cleanTitle,
         desc: e.sy ? String(e.sy).trim() : "",
         start: start.toISOString(),
-        end: end.toISOString()
+        end: end.toISOString(),
+        // Sky metadata pass-through:
+        //  esg — sport sub-genre code (server-side classification)
+        //  hd  — HD broadcast flag
+        //  programmeuuid — used to compose pd-image thumbnail URLs
+        skyEsg: typeof e.esg === "number" ? e.esg : null,
+        hd: e.hd === true,
+        programmeuuid: e.programmeuuid || null
       };
     });
 }
