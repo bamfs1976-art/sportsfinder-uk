@@ -7,9 +7,12 @@
   publish = "."
   command = ""
 
+[build.environment]
+  # Node 24 LTS, supported to April 2028. Also sets the Functions runtime.
+  NODE_VERSION = "24"
+
 [functions]
   directory = "netlify/functions"
-  # Use the modern Node 20 runtime so we get native fetch and ESM.
   node_bundler = "esbuild"
 
 # Friendly URL for the EPG proxy. Calls to /api/epg are routed to the function.
